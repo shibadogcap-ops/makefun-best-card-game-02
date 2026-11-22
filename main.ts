@@ -1,16 +1,15 @@
-// A working best-game-01 entry (Node 22, standard library only): the game is this directory's
-// game/ folder, plain static files a desktop browser loads offline (game/index.html and its ES
-// modules, no library and no network request), and the program hands it in. It copies game/ and
-// screenshots/ from beside this file to /output and writes /output/dossier.json, the summary the
-// judge reads, with the vendored make.fun library. A starting point, not a winner: Block Dodger, a
-// plain 2D canvas game where a paddle dodges falling blocks and catches coins, with a title screen,
-// score, lives and levels, game over and restart, flat colours and no sound. Build your own game
-// (any genre, any library you vendor under game/, or none), put your 3 or 4 PNG or JPEG screenshots
-// in screenshots/ (the first by name is the cover) and run it.
+// AETHER CLASH entry (Node 22, standard library only): the game is this directory's game/ folder,
+// plain static files a desktop browser loads offline (game/index.html and its ES modules under
+// game/src/, no library and no network request) — an original card duel where two players clash
+// over the aether. This program hands it in: it copies game/ and screenshots/ from beside this
+// file to the output directory (/output in the grader) and writes dossier.json there, the
+// summary the judge reads, built with the vendored make.fun library (buildDossier). The four
+// screenshots in screenshots/ are 1-title.jpg (title screen), 2-table.jpg (mid-duel table),
+// 3-win.jpg (victory) and 4-loss.jpg (defeat); the first by name is the cover.
 //
-// Serve it locally with `node serve.ts`, then open http://localhost:8080.
+// Serve it locally with `node serve.ts`, then open http://localhost:8080 to play.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
-//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+//   MAKEFUN_OUTPUT_DIR=out node main.ts
 
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
