@@ -1,132 +1,82 @@
-// Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s steps
-// (several in a slow frame, none in a fast one), and the renderer paints what is there. The game
-// moves between four screens: title, play, paused and game over.
+// Boot and the one loop for AETHER CLASH: the renderer paints the 1280x720 playfield
+// letterboxed into the window, input drives the game object, and step() advances the duel
+// by real milliseconds (clamped so a hidden tab doesn't fast-forward a clash).
 //
-// ?seed=N fixes the falling pattern. ?shot=start|play|end (with &seed=N) stages that scene
-// instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
-import { BEST_KEY, LIVES, STEP } from './config.js';
-import { createRandom } from './random.js';
-import { createWorld, EVENT_HIT, EVENT_OVER } from './world.js';
-import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
-import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// ?seed=N fixes the shuffle. ?shot=title|table|win|loss stages that scene instead of a live
+// game: it is drawn once, then only the idle animation keeps running (never gameplay).
+import { VIEW } from './config.js';
+import { createGame, SCREEN } from './game.js';
+import { createRenderer } from './render.js';
+import { createAudio } from './audio.js';
+import { attachInput } from './input.js';
 import { stageShot } from './shots.js';
-
-/** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
-const MAX_FRAME = 0.25;
 
 const params = new URLSearchParams(window.location.search);
 const shot = params.get('shot');
 const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() * 4294967296);
+const seed = Number.isInteger(seedParam) ? seedParam : 20261122;
 
 const canvas = document.getElementById('game');
 const status = document.getElementById('status');
-const world = createWorld(createRandom(seed));
-const renderer = createRenderer(canvas);
+canvas.setAttribute(
+  'aria-label',
+  'Aether Clash: a card duel where you and the rival duelist Kael each pick a card each round, the rotating trump suit decides the clash, and the first duelist to 0 Life loses'
+);
 
-function readBest() {
-  try {
-    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
-  } catch {
-    return 0;
-  }
+// Cap the backing-store density at 2x so large windows stay cheap to paint.
+try {
+  const realDpr = window.devicePixelRatio || 1;
+  Object.defineProperty(window, 'devicePixelRatio', {
+    get: () => Math.min(realDpr, 2),
+    configurable: true,
+  });
+} catch {
+  // If the property can't be redefined the renderer just uses the real ratio.
 }
 
-function saveBest(value) {
-  try {
-    window.localStorage.setItem(BEST_KEY, String(value));
-  } catch {
-    // Storage can be off (private windows): the best score then lasts this visit only.
-  }
+const renderer = createRenderer(canvas);
+const audio = createAudio();
+const game = createGame(seed);
+
+// Client pixels -> virtual 1280x720, the same letterbox mapping the renderer applies.
+function toVirtual(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const w = rect.width || window.innerWidth;
+  const h = rect.height || window.innerHeight;
+  const scale = Math.min(w / VIEW.width, h / VIEW.height);
+  const ox = (w - VIEW.width * scale) / 2;
+  const oy = (h - VIEW.height * scale) / 2;
+  return { x: (clientX - rect.left - ox) / scale, y: (clientY - rect.top - oy) / scale };
 }
 
 function runShot(name) {
-  const scene = stageShot(name, world);
-  let painted = 0;
-  function paint() {
-    renderer.draw(world.state, scene.screen, scene.best);
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
+  stageShot(name, game);
+  renderer.draw(game);
+  let frames = 0;
+  function frame() {
+    requestAnimationFrame(frame);
+    // Idle motion only: title/end screens keep floating and sparkling; a staged table
+    // scene is frozen exactly as stageShot left it.
+    if (game.screen !== SCREEN.TABLE) game.step(16);
+    renderer.draw(game);
+    frames += 1;
+    if (frames === 2) window.__shotReady = true;
   }
-  requestAnimationFrame(paint);
+  requestAnimationFrame(frame);
 }
 
 function runGame() {
-  const input = createInput(canvas);
-  let screen = SCREEN_TITLE;
-  let best = readBest();
-  let accumulator = 0;
+  attachInput(canvas, game, audio, toVirtual);
+  if (status) status.textContent = game.banner || '';
+
   let last = performance.now();
-
-  // Screen readers (and anyone watching the page's text) hear the screen changes and each hit.
-  function announce(message) {
-    status.textContent = message;
-  }
-
-  function startGame() {
-    world.reset();
-    accumulator = 0;
-    screen = SCREEN_PLAY;
-    announce(`Playing. ${LIVES} lives.`);
-  }
-
-  function endGame() {
-    screen = SCREEN_OVER;
-    if (world.state.score > best) {
-      best = world.state.score;
-      saveBest(best);
-    }
-    announce(`Game over. Score ${world.state.score}. Best ${best}.`);
-  }
-
-  function handleActions() {
-    const actions = input.takeActions();
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
-    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
-      screen = SCREEN_PLAY;
-      announce('Playing.');
-    }
-  }
-
-  function step() {
-    if (screen === SCREEN_TITLE) {
-      world.step(STEP, 0, true);
-      return;
-    }
-    const events = world.step(STEP, input.direction(), false);
-    if (events & EVENT_OVER) endGame();
-    else if (events & EVENT_HIT) announce(world.state.lives === 1 ? 'Hit. 1 life left.' : `Hit. ${world.state.lives} lives left.`);
-  }
-
   function frame(now) {
     requestAnimationFrame(frame);
-    accumulator += Math.min((now - last) / 1000, MAX_FRAME);
+    const dt = Math.min(now - last, 50);
     last = now;
-    handleActions();
-    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
-      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step();
-        accumulator -= STEP;
-      }
-    } else {
-      accumulator = 0;
-    }
-    renderer.draw(world.state, screen, best);
+    game.step(dt);
+    renderer.draw(game);
   }
-
-  // Leaving the tab pauses a running game rather than letting blocks fall unseen.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    }
-  });
-
-  announce('Block Dodger. Press Space or click to start.');
   requestAnimationFrame(frame);
 }
 
